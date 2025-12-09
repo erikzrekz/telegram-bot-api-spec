@@ -40,7 +40,7 @@ jobs:
         run: wget ${{ steps.get_source_url.outputs.url }} -O source.html
 
       - name: Download scraping tool
-        uses: dsaltares/fetch-gh-release-asset@v1.1.2
+        uses: dsaltares/fetch-gh-release-asset@1.1.2
         with:
           repo: alserom/tg-bot-api-spec
           version: latest
