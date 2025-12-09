@@ -22,19 +22,16 @@ jobs:
       - id: get_source_url
         env:
           DEFAULT_SOURCE_URL: https://core.telegram.org/bots/api
-        run: echo "url=${{ github.event.inputs.source_url || env.DEFAULT_SOURCE_URL }}" >> $GITHUB_OUTPUT
-
-      - id: get_current_version_json
-        run: |
-          content=`[ -f version.json ] && cat version.json || echo {"version":false}`
-          content="${content//'%'/'%25'}"
-          content="${content//$'\n'/'%0A'}"
-          content="${content//$'\r'/'%0D'}"
-          echo "versionJson=$content" >> $GITHUB_OUTPUT
+        run: echo "url=${{ github.event.inputs.source_url || env.DEFAULT_SOURCE_URL }}" >> "$GITHUB_OUTPUT"
 
       - id: get_current_version
         run: |
-          echo "version=${{fromJson(steps.get_current_version_json.outputs.versionJson).version}}" >> $GITHUB_OUTPUT
+          if [ -f version.json ]; then
+            version=$(jq -r '.version' version.json)
+          else
+            version=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       
       - name: Download source
         run: wget ${{ steps.get_source_url.outputs.url }} -O source.html
@@ -59,18 +56,49 @@ jobs:
           path: source.html
           if-no-files-found: error
 
-      - id: get_new_version_json
-        run: |
-          content=`[ -f version.json ] && cat version.json || echo {"version":false}`
-          content="${content//'%'/'%25'}"
-          content="${content//$'\n'/'%0A'}"
-          content="${content//$'\r'/'%0D'}"
-          echo "versionJson=$content" >> $GITHUB_OUTPUT
-
       - id: get_new_version
         run: |
-          echo "version=${{fromJson(steps.get_new_version_json.outputs.versionJson).version}}" >> $GITHUB_OUTPUT
+          if [ -f version.json ]; then
+            version=$(jq -r '.version' version.json)
+          else
+            version=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - id: pr_data
         run: |
-          if git show-ref --tags --veri
+          if git show-ref --tags --verify --quiet "refs/tags/v${{ steps.get_new_version.outputs.version }}"; then
+            echo "commit_msg=fix(spec): updating Bot API ${{ steps.get_new_version.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "title=Rollback from v${{ steps.get_current_version.outputs.version }} to v${{ steps.get_new_version.outputs.version }}?" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.get_new_version.outputs.version }}" == "${{ steps.get_current_version.outputs.version }}" ]]; then
+            echo "commit_msg=fix(spec): updating Bot API ${{ steps.get_new_version.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "title=Updating according to the latest changes" >> "$GITHUB_OUTPUT"
+          else
+            echo "commit_msg=feat(spec): introducing Bot API ${{ steps.get_new_version.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "title=Adding new version" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - run: rm source.html
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          branch: automated/spec-update
+          reviewers: alserom
+          assignees: alserom
+          labels: |
+            automated
+          delete-branch: true
+          commit-message: ${{ steps.pr_data.outputs.commit_msg }}
+          title: '[Bot API ${{ steps.get_new_version.outputs.version }}] ${{ steps.pr_data.outputs.title }}'
+          body: |
+            This is an automated PR. Please check the diff and the action [logs][1] to prevent unexpected behavior.
+            [1]: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
